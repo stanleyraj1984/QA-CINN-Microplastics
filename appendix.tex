@@ -1,0 +1,93 @@
+\appendix
+\section{Supplementary Tables}\label{app:tables}
+\subsection{Complete FTIR Results per Fold}
+\begin{table}[H]\centering\small
+\caption{FTIR per-fold results (Random Forest).}
+\begin{tabular}{clccccc}\toprule Fold & Test specimens & PE & PET & HDPE & Accuracy\\\midrule
+0 & PE 01, PET 01 & 1/1 & 1/1 & 0/0 & 1.000\\ 1 & PE 02, PET 02 & 1/1 & 1/1 & 0/0 & 1.000\\ 2 & PE 03, PET 03 & 1/1 & 1/1 & 0/0 & 1.000\\
+3 & PE 04, PET 04 & 1/1 & 1/1 & 0/0 & 1.000\\ 4 & PE 05, HDPE 01 & 1/1 & 0/0 & 0/1 & 0.500\\\bottomrule\end{tabular}\end{table}
+
+\subsection{Hyper-parameters of the Dense Pipeline}
+\begin{table}[H]\centering\small
+\caption{Key hyper-parameters of the dense pipeline.}
+\begin{tabular}{ll}\toprule Parameter & Value\\\midrule
+ALS $\lambda$ / $p$ & $10^5$ / 0.01\\ SNV & Yes\\ Savitzky--Golay window / polyorder & 11 / 3\\ FTIR grid & 650--4000~\cmi, 1~\cmi\\ Raman grid & 100--3200~\cmi, 1.5~\cmi\\
+CINN hidden dims & [256, 128, 64]\\ CINN dropout & 0.3\\ CINN $\eta$ / weight decay & $10^{-3}$ / $10^{-4}$\\ CINN batch size / early stopping & 16 / patience $=20$\\
+Quality weights & [0.25, 0.15, 0.20, 0.15, 0.25]\\ Fusion $w_m$ & $Q_m\times\max_cP_m(c)$\\ Random seed & 42 (plus 43--46 for variance)\\\bottomrule\end{tabular}\end{table}
+
+\section{CI-MoE Hyper-parameters and Algorithm}\label{app:algo}
+Table~\ref{tab:moehp} lists the settings. They are defaults chosen a priori (loss weights of the order used for load balancing and $z$-loss in Fedus et al.\ \cite{b20} and Zoph et al.\ \cite{b64}); they were not tuned on any data and are frozen in \texttt{code/qacinn/config.py}.
+\begin{table}[H]\centering\small
+\caption{CI-MoE hyper-parameters (fixed a priori, untuned).}\label{tab:moehp}
+\begin{tabular}{p{4.2cm}p{10.4cm}}\toprule Parameter & Value\\\midrule
+Experts (FTIR / Raman) & $K+2=9$ / $K+2=7$ (regions + ratio/derivative + generalist)\\
+Expert network & Linear($|S_e|$,32)--BN--ReLU--Dropout(0.3)--Linear(32,16)\\
+Expert head & Linear(16, $n_{\text{classes}}$)\\
+Gate input & $[\mathbf s(\bx);\bq;\bmm]$, single linear layer, zero-initialised (uniform routing at start)\\
+Gate temperature $\tau$ / $\varepsilon$ & 1.0 / $10^{-6}$\\ Sparse-gate $k$ / noise $\sigma_g$ (ablation) & 2 / 0.1\\ Expert dropout $p_e$ & 0.1\\
+$\lambda_{\mathrm{unc}}$ / $\lambda_{\mathrm{bal}}$ / $\lambda_z$ & 0.1 (as dense CINN) / 0.01 / $10^{-3}$\\ Prior $\rho$ & uniform (default)\\
+Optimizer, batch, early stopping, seeds & as dense CINN\\\bottomrule\end{tabular}\end{table}
+
+\begin{algorithm}[H]\caption{CI-MoE forward pass and loss for one modality (mini-batch of size $B$)}\label{alg:moe}
+\begin{algorithmic}[1]
+\Require standardized features $\bx$, quality $\bq$, coverage $\bmm$, label $y$, prior $\rho$
+\For{each expert $e=1,\dots,E$}\State $\pi_e\gets\softmax(V_ef_e(\bx_{S_e}))$\Comment{expert distribution}\EndFor
+\State $\ell_e\gets\mathbf w_e^\top[\mathbf s(\bx);\bq;\bmm]+b_e$;\quad $\tilde\ell_e\gets\ell_e+\log(m_e+\varepsilon)$
+\State (training only) drop each expert w.p.\ $p_e$: set $\tilde\ell_e\gets-\infty$
+\State $\mathbf g\gets\softmax(\tilde{\boldsymbol\ell}/\tau)$\Comment{or noisy top-$k$}
+\State $P\gets\sum_eg_e\pi_e$;\quad $I\gets\Hent[P]-\sum_eg_e\Hent[\pi_e]$
+\State $\mathcal{L}\gets-\log P(y)+\lambda_{\mathrm{unc}}\mathcal{L}_{\mathrm{unc}}+\lambda_{\mathrm{bal}}\KL(\bar{\mathbf g}\|\rho)+\lambda_z(\log\sum_ee^{\tilde\ell_e})^2$
+\State \Return $P,I,\sigma,\mathcal{L}$
+\end{algorithmic}\end{algorithm}
+
+\section{Proofs}\label{app:proofs}
+\subsection*{Proof of Proposition~\ref{prop:resp} and Corollary~\ref{cor:stat}}
+Let $M=\sum_jg_j\pi_j(y)$ so $\mathcal{L}_{\mathrm{CE}}=-\log M$. For the expert logits, $\partial\pi_e(y)/\partial z_{e,c}=\pi_e(y)(\mathbb 1[c=y]-\pi_e(c))$, hence
+$\partial\mathcal{L}_{\mathrm{CE}}/\partial z_{e,c}=-\frac{g_e\pi_e(y)}{M}(\mathbb 1[c=y]-\pi_e(c))=-r_e(\mathbb 1[c=y]-\pi_e(c))$.
+For the gate, with $g=\softmax(\tilde\ell/\tau)$, $\partial g_j/\partial\tilde\ell_e=\frac1\tau g_j(\mathbb 1[j=e]-g_e)$. Therefore
+\[\frac{\partial\mathcal{L}_{\mathrm{CE}}}{\partial\tilde\ell_e}=-\frac1M\sum_j\pi_j(y)\frac{g_j(\mathbb 1[j=e]-g_e)}{\tau}=-\frac1{\tau M}\big(g_e\pi_e(y)-g_eM\big)=\frac{1}{\tau}(g_e-r_e).\]
+At a stationary point of the batch average, $\E[g_e-r_e]=0$ for each $e$, which is Corollary~\ref{cor:stat}. \qed
+
+\subsection*{Proof of Proposition~\ref{prop:removal}}
+Write $G_{\mathcal U}=\sum_{e\in\mathcal U}g_e$. For $e\in\mathcal V$, $g_e=(1-G_{\mathcal U})g^{\mathcal V}_e$, because the softmax over all experts factorises into the mass on $\mathcal U$ and a softmax over $\mathcal V$ (the mask terms of $\mathcal V$ are included in $\tilde\ell_{\mathcal V}$). Hence $P=(1-G_{\mathcal U})P^{\mathcal V}+G_{\mathcal U}P^{\mathcal U}$ with $P^{\mathcal U}$ the normalised mixture over $\mathcal U$, and $\|P-P^{\mathcal V}\|_1=G_{\mathcal U}\|P^{\mathcal U}-P^{\mathcal V}\|_1\le2G_{\mathcal U}$. Lemma~\ref{lem:mask} bounds each $g_e$, $e\in\mathcal U$, by $g_e/g_j$ for any $j\in\mathcal V$, and $m_j\ge\min_{\mathcal V}m>0$, so each term is at most $(\varepsilon/(\varepsilon+\min m))^{1/\tau}e^{\Delta/\tau}$. \qed
+
+\subsection*{Proof of Proposition~\ref{prop:Ibound}}
+$\sum_eg_e\KL(\pi_e\|P)=\sum_eg_e\sum_c\pi_e(c)\log\frac{\pi_e(c)}{P(c)}=-\sum_eg_e\Hent[\pi_e]-\sum_cP(c)\log P(c)=I$. Nonnegativity follows from $\KL\ge0$; equality requires $\pi_e=P$ for all $e$ with $g_e>0$. For the upper bound, let $E\sim\mathbf g$ and $Y\mid E\sim\pi_E$; then $I=\mathrm{I}(E;Y)=\Hent[E]-\Hent[E\mid Y]\le\Hent[E]=\Hent[\mathbf g]\le\log E$ \cite{b69}. \qed
+
+\subsection*{Proof of Theorem~\ref{thm:ambiguity}}
+Expanding $\|P_m-e_y\|^2=\|P_m-\Pfused\|^2+2\langle P_m-\Pfused,\Pfused-e_y\rangle+\|\Pfused-e_y\|^2$ and averaging with weights $\omega_m$, the cross term vanishes because $\sum_m\omega_m(P_m-\Pfused)=0$. Thus $\sum_m\omega_m\mathrm{BS}(P_m)=\mathrm{BS}(\Pfused)+\sum_m\omega_m\|P_m-\Pfused\|^2$. \qed
+
+\subsection*{Proof of Proposition~\ref{prop:sharp}}
+Entropy is concave on the simplex; Jensen's inequality gives $\Hent[\sum_m\omega_mP_m]\ge\sum_m\omega_m\Hent[P_m]$, with equality iff all $P_m$ (with $\omega_m>0$) coincide, by strict concavity. \qed
+
+\subsection*{Proof of Proposition~\ref{prop:axioms} (property 4)}
+$\omega_F=w_F/(w_F+w_R)$ has $\partial\omega_F/\partial w_F=w_R/(w_F+w_R)^2>0$ and $\partial\omega_F/\partial w_R=-w_F/(w_F+w_R)^2<0$. With $w_m=Q_m\max_cP_m(c)$ and $Q_m,\max_cP_m(c)>0$, the chain rule gives the stated signs. Properties 1--3 and 5 follow by substitution. \qed
+
+\subsection*{Proof of Proposition~\ref{prop:Q}}
+(i) and (iv) are immediate from $\sum_iw_i=1$, $w_i>0$ and $q_i\in[0,1]$. (ii) is the triangle inequality with $\sum_iw_i=1$. (iii) $u\mapsto1/(1+u)$ is strictly decreasing on $[0,\infty)$ with range $(0,1]$. \qed
+
+\section{Code}\label{app:code}
+The complete implementation is in the \texttt{code/} folder of this project. Its structure:
+\begin{itemize}\itemsep0pt
+\item \texttt{qacinn/config.py}: fixed a-priori configuration (grids, regions, peaks, hyper-parameters);
+\item \texttt{qacinn/preprocess.py}: ALS baseline, SNV, Savitzky--Golay, interpolation and coverage mask;
+\item \texttt{qacinn/features.py}: chemistry-informed features with wavenumber tags, expert partition, coverage fractions;
+\item \texttt{qacinn/quality.py}: five quality metrics and composite $Q$;
+\item \texttt{qacinn/models.py}: dense CINN and CI-MoE (Listing~\ref{lst:models});
+\item \texttt{qacinn/train.py}, \texttt{protocol.py}: training, specimen-level CV, stress tests, baselines;
+\item \texttt{qacinn/fusion.py}, \texttt{metrics.py}: fusion variants, Brier/ECE/Clopper--Pearson;
+\item \texttt{run\_all.py}: one-command regeneration of \texttt{results/cimoe\_results.tex};
+\item \texttt{tests\_numpy.py}: torch-free tests, including a randomised check of Proposition~\ref{prop:convex} and Eq.~\eqref{eq:decomp}.
+\end{itemize}
+\subsection{Reproduction}
+\begin{lstlisting}[language=bash,numbers=none]
+pip install -r code/requirements.txt
+cd code
+python tests_numpy.py                          # sanity checks, no GPU or torch needed
+python run_all.py --manifest data/manifest.csv # writes ../results/cimoe_results.tex
+\end{lstlisting}
+The manifest has columns \texttt{file,modality,label,specimen}; replicates of one physical specimen share the \texttt{specimen} identifier so that cross-validation never splits them. After the run, recompiling \texttt{main.tex} includes the generated tables automatically. The option \texttt{--synthetic} runs the same code on simulated Gaussian-band spectra for a software test; those outputs go to a separate folder and must never be reported as measurements.
+
+\subsection{Listing: models}
+\lstinputlisting[caption={\texttt{qacinn/models.py}: dense CINN and CI-MoE.},label={lst:models}]{code/qacinn/models.py}
+
